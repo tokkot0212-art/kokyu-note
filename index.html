@@ -201,6 +201,8 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
       <div class="orb" id="orb"></div>
       <div class="phase" id="phase">すう</div>
     </div>
+    <audio id="track" preload="auto" playsinline></audio>
+    <label id="hapL" aria-hidden="true" style="position:absolute;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none"><input type="checkbox" switch tabindex="-1"></label>
     <button class="notice" id="notice" aria-label="それたことに気づいた">
       <i></i><b>気づいた</b><span>それたら、ここをタップ</span>
     </button>
@@ -252,7 +254,7 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
         <div class="srow"><div class="top">アラーム音</div><div class="chips" id="sSound"></div></div>
         <div class="srow"><div class="top">アラームの回数</div><div class="chips" id="sCount"></div></div>
         <div class="srow"><div class="top">タイマー終了時に振動<button class="sw" id="vib" role="switch" aria-label="タイマー終了時に振動"></button></div>
-          <div class="note" id="vibNote" hidden>iPhoneでは、アプリから直接は振動させられません。振動で知りたいときは下の「iPhoneのタイマーで知らせる」を使ってください。</div></div>
+          <div class="note" id="vibNote" hidden>iPhoneでは、アプリから本体を振動させられません。代わりに、終了音は画面ロック中も鳴ります（iPhoneの音量ボタンの大きさで鳴ります）。「気づいた」をタップしたときは、iPhoneによっては軽く「コツ」と振動します。</div></div>
         <div class="srow"><div class="top">iPhoneのタイマーで知らせる<button class="sw" id="iosTimer" role="switch" aria-label="iPhoneのタイマーで知らせる"></button></div>
           <div class="note">開始と同時に、ショートカット「呼吸ノート」で時計アプリのタイマーをセットします。画面が消えても、iPhoneの設定どおり振動や音で知らせてくれます。一度ショートカットアプリが開くので、呼吸ノートに戻ってください。</div>
           <details class="note"><summary>ショートカットの作り方</summary>
@@ -378,6 +380,7 @@ function note(dest,type,f,t,att,dur,peak){
   o.connect(g);g.connect(dest);o.start(t);o.stop(t+dur+0.05);
 }
 function silence(){
+  if(trackOn&&(!S||S.done))stopTrack();
   if(alarmG&&audio){try{alarmG.gain.setTargetAtTime(0,audio.currentTime,0.05)}catch(e){}}
   alarmG=null;
 }
@@ -394,6 +397,67 @@ function playAlarm(n){
 }
 function blip(f,dur,peak){var g=bus();if(!g)return;try{note(g,"sine",f,audio.currentTime+0.02,0.01,dur,peak)}catch(e){}}
 
+/* ---------- 終了音トラック（画面ロック中も鳴る） ---------- */
+var trackUrl=null,trackOn=false;
+function makeTrack(sx){
+  var SR=4000,events=[],i,end;
+  for(i=0;i<sx.sets;i++){
+    end=i*(sx.dur+sx.gap)+sx.dur;
+    if(set.pre>0&&sx.dur>=set.pre*2)events.push([end-set.pre,"pre"]);
+    if(set.cd)for(var c=3;c>=1;c--)events.push([end-c,"cd"]);
+    if(i<sx.sets-1)events.push([end,"bell1"]);
+  }
+  var step=set.sound==="digital"?1.0:set.sound==="bell"?1.6:2.0,n=Math.max(1,set.count);
+  for(i=0;i<n;i++)events.push([sx.total+i*step,"alarm"]);
+  var len=Math.ceil((sx.total+n*step+3)*SR),pcm=new Uint8Array(44+len);
+  pcm.fill(128,44);
+  var amp=Math.min(1,set.vol/100)*110;
+  function tone(t0,f,att,dur,peak,sq){
+    var a=Math.floor(t0*SR),m=Math.floor(dur*SR);
+    for(var k=0;k<m;k++){
+      var idx=44+a+k;if(idx<44||idx>=pcm.length)continue;
+      var t=k/SR,env=t<att?t/att:Math.exp(-(t-att)*4.5/dur);
+      var w=Math.sin(2*Math.PI*f*t);if(sq)w=w>=0?0.6:-0.6;
+      var v=pcm[idx]-128+w*env*peak*amp;
+      pcm[idx]=Math.max(0,Math.min(255,Math.round(128+v)));
+    }
+  }
+  function alarmAt(t){
+    if(set.sound==="digital"){[0,0.15,0.3].forEach(function(d){tone(t+d,880,0.005,0.09,0.55,true)})}
+    else if(set.sound==="bell"){tone(t,528,0.01,2.2,0.75);tone(t,792,0.01,1.6,0.22)}
+    else{tone(t,396,0.3,1.9,0.75);tone(t,594,0.3,1.6,0.25)}
+  }
+  events.forEach(function(ev){
+    if(ev[1]==="alarm"||ev[1]==="bell1")alarmAt(ev[0]);
+    else if(ev[1]==="pre")tone(ev[0],660,0.01,0.7,0.45);
+    else tone(ev[0],880,0.01,0.12,0.45);
+  });
+  var dv=new DataView(pcm.buffer);
+  function str(o,x){for(var j=0;j<x.length;j++)dv.setUint8(o+j,x.charCodeAt(j))}
+  str(0,"RIFF");dv.setUint32(4,36+len,true);str(8,"WAVE");str(12,"fmt ");
+  dv.setUint32(16,16,true);dv.setUint16(20,1,true);dv.setUint16(22,1,true);
+  dv.setUint32(24,SR,true);dv.setUint32(28,SR,true);dv.setUint16(32,1,true);dv.setUint16(34,8,true);
+  str(36,"data");dv.setUint32(40,len,true);
+  if(trackUrl)URL.revokeObjectURL(trackUrl);
+  trackUrl=URL.createObjectURL(new Blob([pcm],{type:"audio/wav"}));
+  return trackUrl;
+}
+function startTrack(sx){
+  trackOn=false;
+  if(set.vol<=0)return;
+  try{
+    var a=$("track");a.src=makeTrack(sx);a.currentTime=0;
+    var p=a.play();trackOn=true;
+    if(p&&p.catch)p.catch(function(){trackOn=false});
+    if("mediaSession" in navigator&&window.MediaMetadata){
+      navigator.mediaSession.metadata=new MediaMetadata({title:"瞑想中",artist:"呼吸ノート"});
+    }
+  }catch(e){trackOn=false}
+}
+function stopTrack(){try{var a=$("track");a.pause();a.removeAttribute("src");a.load()}catch(e){}trackOn=false}
+function trackAlive(){var a=$("track");return trackOn&&(!a.paused||a.ended)}
+function haptic(){try{$("hapL").click()}catch(e){}}
+
 /* ---------- 瞑想 ---------- */
 function begin(min){
   set.place=$("place").value.trim();set.what=$("what").value.trim()||"呼吸瞑想";lsSet(LS_SET,set);
@@ -402,6 +466,7 @@ function begin(min){
   var dur=min*60,sets=Math.max(1,set.repeat),gap=sets>1?set.gap:0;
   S={t0:Date.now(),min:min,dur:dur,sets:sets,gap:gap,total:sets*dur+(sets-1)*gap,count:0,phase:"",
      preIdx:-1,cdKey:"",before:$("before").value.trim(),pat:{in:set.in,hold:set.hold,out:set.out}};
+  startTrack(S);
   $("orb").style.transitionDuration="0s";$("orb").style.transform="scale(.5)";
   $("stop").classList.remove("arm");$("stop").textContent="終了";
   show("sit");
@@ -425,14 +490,14 @@ function tick(){
     if(S.phase!=="rest"+x.idx){
       S.phase="rest"+x.idx;$("phase").textContent="やすむ";
       orb.style.transitionDuration="1s";orb.style.transform="scale(.5)";
-      playAlarm(1);
+      if(!trackAlive())playAlarm(1);
     }
     return;
   }
   var left=S.dur-x.w;
   $("remain").textContent=fmt(left)+tag;
-  if(set.pre>0&&S.dur>=set.pre*2&&left<=set.pre&&S.preIdx!==x.idx){S.preIdx=x.idx;blip(660,0.7,0.3)}
-  if(set.cd&&left<=3){var k=x.idx+":"+Math.ceil(left);if(S.cdKey!==k){S.cdKey=k;blip(880,0.12,0.3)}}
+  if(set.pre>0&&S.dur>=set.pre*2&&left<=set.pre&&S.preIdx!==x.idx){S.preIdx=x.idx;if(!trackAlive())blip(660,0.7,0.3)}
+  if(set.cd&&left<=3){var k=x.idx+":"+Math.ceil(left);if(S.cdKey!==k){S.cdKey=k;if(!trackAlive())blip(880,0.12,0.3)}}
   var p=S.pat,cyc=p.in+p.hold+p.out,t=x.w%cyc,ph,pl;
   if(t<p.in){ph="in";pl=p.in-t}else if(t<p.in+p.hold){ph="hold";pl=p.in+p.hold-t}else{ph="out";pl=cyc-t}
   if(x.idx+ph!==S.phase){
@@ -446,22 +511,22 @@ function tick(){
 }
 var hitT=null;
 $("notice").addEventListener("pointerdown",function(e){
-  if(!S)return;e.preventDefault();S.count++;
+  if(!S)return;e.preventDefault();S.count++;haptic();
   var n=$("notice");n.classList.remove("hit");void n.offsetWidth;n.classList.add("hit");
   clearTimeout(hitT);hitT=setTimeout(function(){n.classList.remove("hit")},500);
 });
 var armT=null;
 $("stop").onclick=function(){
   var b=$("stop");
-  if(b.classList.contains("arm")){finish(where((Date.now()-S.t0)/1000).sit,false);return}
+  if(b.classList.contains("arm")){stopTrack();finish(where((Date.now()-S.t0)/1000).sit,false);return}
   b.classList.add("arm");b.textContent="もう一度タップで終了";
   clearTimeout(armT);armT=setTimeout(function(){b.classList.remove("arm");b.textContent="終了"},3000);
 };
 function finish(sec,ring){
-  clearInterval(S.timer);S.sec=Math.round(sec);
+  clearInterval(S.timer);S.done=true;S.sec=Math.round(sec);
   try{wake&&wake.release()}catch(e){}wake=null;
   if(ring){
-    playAlarm(set.count);
+    if(!trackAlive())playAlarm(set.count);
     if(set.vib&&navigator.vibrate){try{navigator.vibrate([400,200,400,200,400])}catch(e){}}
   }
   var m=Math.floor(S.sec/60),s=S.sec%60;
