@@ -69,6 +69,7 @@ h1{font-family:var(--display);font-weight:600;font-size:24px;letter-spacing:.06e
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .primary{height:60px;border-radius:16px;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:18px;letter-spacing:.2em;flex-shrink:0}
 .primary:active{opacity:.85}
+.ghost.arm{background:var(--ink);color:var(--bg)}
 .ghost{height:48px;border-radius:12px;border:1px solid var(--line);color:var(--muted);font-size:14px}
 
 .tlist{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
@@ -207,7 +208,7 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
 
   <!-- 終了後 -->
   <section class="view" id="after">
-    <div><h1>おつかれさまでした</h1><p class="sub">気づけた回数は、呼吸に戻れた回数です。</p></div>
+    <div><h1>おつかれさまでした</h1><p class="sub">記録は自動で保存しました。気持ちを書くと、その場で記録に入ります。</p></div>
     <div class="result">
       <div class="card"><div class="label">すわった時間</div><div class="big" id="resTime"></div></div>
       <div class="card"><div class="label">気づき</div><div class="big" id="resCount"></div></div>
@@ -220,9 +221,10 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
       <label class="label" for="memo">どうだった？（なくてもOK）</label>
       <input class="field" id="memo" placeholder="例：後半は眠気があった" maxlength="60" autocomplete="off">
     </div>
-    <button class="primary" id="save">記録する</button>
-    <button class="ghost" id="again" hidden>記録して、同じ時間でもう一度</button>
-    <button class="ghost" id="discard">記録せずに戻る</button>
+    <p class="sub" id="timerNote" hidden>途中で終えたので、iPhoneの時計アプリのタイマーは自分で止めてください。</p>
+    <button class="primary" id="save">完了</button>
+    <button class="ghost" id="again" hidden>同じ時間でもう一度</button>
+    <button class="ghost" id="discard">この記録を消す</button>
   </section>
 
   <!-- 記録 -->
@@ -250,7 +252,17 @@ input[type=range]{width:100%;height:36px;accent-color:var(--accent)}
         <div class="srow"><div class="top">アラーム音</div><div class="chips" id="sSound"></div></div>
         <div class="srow"><div class="top">アラームの回数</div><div class="chips" id="sCount"></div></div>
         <div class="srow"><div class="top">タイマー終了時に振動<button class="sw" id="vib" role="switch" aria-label="タイマー終了時に振動"></button></div>
-          <div class="note" id="vibNote" hidden>このiPhoneのブラウザでは振動を使えません。</div></div>
+          <div class="note" id="vibNote" hidden>iPhoneでは、アプリから直接は振動させられません。振動で知りたいときは下の「iPhoneのタイマーで知らせる」を使ってください。</div></div>
+        <div class="srow"><div class="top">iPhoneのタイマーで知らせる<button class="sw" id="iosTimer" role="switch" aria-label="iPhoneのタイマーで知らせる"></button></div>
+          <div class="note">開始と同時に、ショートカット「呼吸ノート」で時計アプリのタイマーをセットします。画面が消えても、iPhoneの設定どおり振動や音で知らせてくれます。一度ショートカットアプリが開くので、呼吸ノートに戻ってください。</div>
+          <details class="note"><summary>ショートカットの作り方</summary>
+            <ol style="padding-left:1.2em;margin-top:6px">
+              <li>ショートカットアプリで新規作成し、名前を「呼吸ノート」にする</li>
+              <li>アクション「タイマーを開始」を追加</li>
+              <li>時間の欄に「ショートカットの入力」を入れ、単位を「秒」にする</li>
+              <li>振動だけにしたいときは、時計アプリ → タイマー →「タイマー終了時」でサウンドを「なし」、バイブレーションを好きなパターンにする</li>
+            </ol>
+          </details></div>
       </div>
     </div>
     <div class="group"><div class="label">事前のお知らせ</div>
@@ -285,7 +297,7 @@ function lsGet(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d}c
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
 
 /* ---------- 設定 ---------- */
-var set=Object.assign({in:4,hold:4,out:6,place:"",what:"呼吸瞑想",vol:30,sound:"soft",count:3,vib:false,pre:0,cd:false,restart:false,repeat:1,gap:0,accent:"teal"},lsGet(LS_SET,{}));
+var set=Object.assign({in:4,hold:4,out:6,place:"",what:"呼吸瞑想",vol:70,sound:"bell",count:3,vib:false,iosTimer:false,pre:0,cd:false,restart:false,repeat:1,gap:0,accent:"teal"},lsGet(LS_SET,{}));
 var PRESETS=[["4・4・6",4,4,6],["4・0・6",4,0,6],["4・7・8",4,7,8],["5・0・5",5,0,5]];
 var PARTS=[["in","すう",1,15],["hold","とまる",0,15],["out","はく",1,20]];
 
@@ -350,7 +362,10 @@ Array.prototype.forEach.call($("tabs").children,function(b){
 
 /* ---------- 音 ---------- */
 var S=null,audio=null,wake=null,alarmG=null;
-function ensureAudio(){try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();audio.resume()}catch(e){audio=null}}
+function ensureAudio(){
+  try{if(navigator.audioSession)navigator.audioSession.type="playback"}catch(e){}
+  try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();audio.resume()}catch(e){audio=null}
+}
 function bus(){
   if(!audio||set.vol<=0)return null;
   try{var g=audio.createGain();g.gain.value=set.vol/100;g.connect(audio.destination);return g}catch(e){return null}
@@ -391,6 +406,9 @@ function begin(min){
   $("stop").classList.remove("arm");$("stop").textContent="終了";
   show("sit");
   S.timer=setInterval(tick,100);tick();
+  if(set.iosTimer){
+    try{location.href="shortcuts://run-shortcut?name="+encodeURIComponent("呼吸ノート")+"&input=text&text="+S.total}catch(e){}
+  }
 }
 function fmt(sec){sec=Math.max(0,Math.round(sec));return Math.floor(sec/60)+":"+("0"+sec%60).slice(-2)}
 function where(el){
@@ -451,19 +469,40 @@ function finish(sec,ring){
   $("resCount").innerHTML=S.count+"<small>回</small>";
   $("afterFeel").value="";$("memo").value="";
   $("again").hidden=!set.restart;
+  $("timerNote").hidden=!(set.iosTimer&&!ring);
+  disarmDiscard();
+  var r={id:"s_"+S.t0,start:new Date(S.t0).toISOString(),sec:S.sec,place:set.place,what:set.what,
+    pat:S.pat,before:S.before,after:"",memo:"",count:S.count};
+  if(S.sets>1)r.sets=S.sets;
+  S.recId=r.id;saveRecord(r);
   show("after");
 }
 $("after").addEventListener("pointerdown",silence);
-function keep(){
-  var r={id:"s_"+S.t0,start:new Date(S.t0).toISOString(),sec:S.sec,place:set.place,what:set.what,
-    pat:S.pat,before:S.before,after:$("afterFeel").value.trim(),memo:$("memo").value.trim(),count:S.count};
-  if(S.sets>1)r.sets=S.sets;
-  var min=S.min;S=null;$("before").value="";
-  saveRecord(r);return min;
+function curRec(){if(!S)return null;for(var i=0;i<records.length;i++)if(records[i].id===S.recId)return records[i];return null}
+function persist(r){
+  cache();
+  if(col){var c=Object.assign({},r);delete c.pending;col.doc(r.id).set(c).then(function(){if(r.pending){delete r.pending;cache()}},function(){r.pending=true;cache()})}
+  else{r.pending=true;cache()}
 }
-$("save").onclick=function(){silence();keep();show("records")};
-$("again").onclick=function(){begin(keep())};
-$("discard").onclick=function(){silence();S=null;show("home")};
+var updT=null;
+function pull(){var r=curRec();if(r){r.after=$("afterFeel").value.trim();r.memo=$("memo").value.trim()}return r}
+function updateRec(){if(!pull())return;clearTimeout(updT);updT=setTimeout(function(){var r=curRec();if(r)persist(r)},500)}
+$("afterFeel").addEventListener("input",updateRec);$("memo").addEventListener("input",updateRec);
+function closeAfter(){
+  if(!S)return 5;
+  clearTimeout(updT);var r=pull();if(r)persist(r);
+  var min=S.min;S=null;$("before").value="";return min;
+}
+$("save").onclick=function(){silence();closeAfter();show("records")};
+$("again").onclick=function(){silence();begin(closeAfter())};
+var discT=null;
+function disarmDiscard(){var b=$("discard");clearTimeout(discT);b.classList.remove("arm");b.textContent="この記録を消す"}
+$("discard").onclick=function(){
+  var b=$("discard");
+  if(!b.classList.contains("arm")){b.classList.add("arm");b.textContent="もう一度タップで消す";clearTimeout(discT);discT=setTimeout(disarmDiscard,3000);return}
+  silence();clearTimeout(updT);var id=S&&S.recId;S=null;$("before").value="";
+  if(id)removeRecord(id);disarmDiscard();show("home");
+};
 
 /* ---------- 設定 ---------- */
 function seg(id,key,opts,after){
@@ -495,7 +534,7 @@ function drawSettings(){
   seg("sCd","cd",[["オフ",false],["最後の3秒",true]]);
   seg("sRepeat","repeat",[["1回",1],["2回",2],["3回",3],["5回",5]]);
   seg("sGap","gap",[["オフ",0],["10秒",10],["30秒",30],["1分",60]]);
-  sw("restart","restart");sw("vib","vib");
+  sw("restart","restart");sw("vib","vib");sw("iosTimer","iosTimer");
   if(!navigator.vibrate){$("vib").disabled=true;$("vib").setAttribute("aria-checked","false");$("vibNote").hidden=false}
 }
 $("vol").oninput=function(){set.vol=+this.value;$("volVal").textContent=set.vol>0?set.vol:"無音"};
